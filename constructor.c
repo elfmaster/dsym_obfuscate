@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <elf.h>
 
-unsigned char dynstr[8192] __attribute__((section(".data"))) =
+unsigned char dynstr_buf[8192] __attribute__((section(".data"))) =
     { [0 ... 8191] = 0};
 
 extern unsigned long get_rip_label;
@@ -35,6 +35,23 @@ _strcmp(const char *s1, const char *s2)
 	return r = (r < 0) ? -1 : 1;
 }
 
+unsigned long
+get_rip(void)
+{
+	unsigned long ret;
+
+	__asm__ __volatile__
+	(
+	"call get_rip_label     \n"
+	".globl get_rip_label   \n"
+	"get_rip_label:         \n"
+	"pop %%rax              \n"
+	"mov %%rax, %0" : "=r"(ret)
+	);
+
+        return ret;
+}
+
 void
 restore_dynstr(void)
 {
@@ -52,7 +69,7 @@ restore_dynstr(void)
 		if (_strcmp(&strtab[shdr[i].sh_name], ".dynstr") != 0)
 			continue;
 		_memcpy((char *)shdr[i].sh_addr,
-		    (char *)PIC_RESOLVE_ADDR(&dynstr), shdr[i].sh_size);
+		    (char *)PIC_RESOLVE_ADDR(&dynstr_buf), shdr[i].sh_size);
 		break;
 	}
 	return;

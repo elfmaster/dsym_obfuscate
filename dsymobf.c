@@ -17,6 +17,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#define TMP_FILE ".xyz.file"
 #define PADDING_SIZE 1024
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096
@@ -34,6 +35,7 @@ backup_dynstr_and_zero(elfobj_t *obj)
 {
 	struct elf_section dynstr;
 	unsigned char *ptr;
+	int i;
 
 	if (elf_section_by_name(obj, ".dynstr", &dynstr) == false) {
 		fprintf(stderr, "couldn't find .dynstr section\n");
@@ -57,16 +59,27 @@ backup_dynstr_and_zero(elfobj_t *obj)
 bool
 inject_constructor(elfobj_t *obj)
 {
-	int i;
+	int i, fd;
 	size_t old_size = obj->size;
-	size_t stub_size = sizeof(stub_shellcode);
+	size_t stub_size;
 	elfobj_t ctor_obj;
+	elf_error_t error;
+	unsigned long stub_vaddr;
+	struct elf_symbol symbol;
+	uint8_t *ptr;
+
+	if (elf_open_object("constructor.o", &ctor_obj,
+	    ELF_LOAD_F_STRICT|ELF_LOAD_F_MAP_WRITE, &error) == false) {
+	    fprintf(stderr, "%s\n", elf_error_msg(&error));
+		exit(EXIT_FAILURE);
+	}
+	stub_size = ctor_obj.size;
 
 	for (i = 0; i < obj->ehdr64->e_phnum; i++) {
 		if (obj->phdr64[i].p_type != PT_NOTE)
 			continue;
 		obj->phdr64[i].p_type = PT_LOAD;
-		stub_vaddr = obj->phdr64[i].p_vaddr = 0xc000000 + old_size;
+		obj->phdr64[i].p_vaddr = 0xc000000 + old_size;
 		obj->phdr64[i].p_filesz = stub_size + PADDING_SIZE;
 		obj->phdr64[i].p_memsz = obj->phdr64[i].p_filesz;
 		obj->phdr64[i].p_flags = PF_R | PF_X;
@@ -89,20 +102,23 @@ inject_constructor(elfobj_t *obj)
 		return false;
 	}
 
-	if (elf_open_object("constructor.o", &ctor_obj,
-	    ELF_LOAD_F_STRICT|ELF_LOAD_F_MAP_WRITE, &error) == false) {
-		fprintf(stderr, "%s\n", elf_error_msg(&error));
-		exit(EXIT_FAILURE);
-	}
 	/*
 	 * open constructor.o and find the buffer to store the contents
 	 * of dynstr (It is called dynstr_buf)
 	 */
 	if (elf_symbol_by_name(&ctor_obj, "dynstr_buf",
-	    dynstr_buf) == false) {
+	    &symbol) == false) {
 		fprintf(stderr, "Unable to find symbol dynstr_buf in constructor.o\n");
 		return false;
 	}
+	/*
+	 * Patch constructor.o so it has the dynstr data
+	 */
+	ptr = elf_address_pointer(&ctor_obj, symbol.value);
+	printf("Copying data pointed to by %p at address %#lx\n", ptr, symbol.value);
+	printf("%lu bytes\n", sizeof(dynstr_backup));
+	memcpy(ptr, dynstr_backup, sizeof(dynstr_backup));
+
 	/*
 	 * Append constructor.o to the end of the target binary
 	 * the target binary has a PT_LOAD segment with corresponding offset

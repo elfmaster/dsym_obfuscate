@@ -163,6 +163,7 @@ inject_constructor(elfobj_t *obj)
 	unsigned long stub_vaddr;
 	struct elf_symbol symbol;
 	struct elf_section ctors;
+	struct elf_section dynstr;
 	uint8_t *ptr;
 
 	if (elf_open_object("egg", &ctor_obj,
@@ -212,11 +213,31 @@ inject_constructor(elfobj_t *obj)
 	}
 	printf("restore_dynstr symbol value: %lx\n", symbol.value);
 	ptr = elf_offset_pointer(obj, ctors.offset);
+
 	uint64_t symbol_offset = symbol.value - (elf_text_base(&ctor_obj) & ~4095);
 	uint64_t entry_point = 0xc000000 + old_size + symbol_offset; // + sizeof(Elf64_Ehdr);
+
 	memcpy(ptr, &entry_point, sizeof(uint64_t));
+
 	printf("Set .init_array to %#lx\n", 0xc000000 + old_size + symbol_offset);
 	printf("ptr value: %lx\n", *(uint64_t *)ptr);
+
+	if (elf_symbol_by_name(&ctor_obj, "dynstr_vaddr",
+	    &symbol) == false) {
+		printf("cannot find symbol \"dynstr_vaddr\"\n");
+		return false;
+	}
+
+	printf("dynstr_vaddr value: %lx\n", symbol.value);
+	symbol_offset = symbol.value - (elf_text_base(&ctor_obj) & ~4095);
+
+	if (elf_section_by_name(obj, ".dynstr", &dynstr) == false) {
+		printf("Cannot find .dynstr\n");
+		return false;
+	}
+	ptr = elf_offset_pointer(&ctor_obj, symbol_offset);
+	memcpy(ptr, &dynstr.address, sizeof(uint64_t));
+	printf("Copied address %lx into egg at offset: %lx\n", dynstr.address, symbol_offset);
 	fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU);
 	if (fd < 0) {
 		perror("open");

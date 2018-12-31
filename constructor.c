@@ -10,6 +10,8 @@ long _write(long, char *, unsigned long);
 unsigned char dynstr_buf[8192] __attribute__((section(".data"), aligned(8))) =
     { [0 ... 8191] = 0};
 
+unsigned long dynstr_vaddr __attribute__((section(".data"))) = {0};
+
 extern unsigned long get_rip_label;
 unsigned long get_rip(void);
 
@@ -66,6 +68,19 @@ _start()
                          "syscall"); 
 }
 
+long _write(long fd, char *buf, unsigned long len)
+{
+        long ret;
+        __asm__ volatile(
+                        "mov %0, %%rdi\n"
+                        "mov %1, %%rsi\n"
+                        "mov %2, %%rdx\n"
+                        "mov $1, %%rax\n"
+                        "syscall" : : "g"(fd), "g"(buf), "g"(len));
+        asm volatile("mov %%rax, %0" : "=r"(ret));
+        return ret;
+}
+
 void
 restore_dynstr(void)
 {
@@ -74,20 +89,28 @@ restore_dynstr(void)
 	Elf64_Shdr *shdr;
 	int i;
 	unsigned char *mem = (unsigned char *)0x400000;
-	const char *string = ".dynstr";
+	char string[] = {'.','d','y','n','s','t','r', 0};
+	char dot[] = {'.', 0};
 
-	ehdr = (void *)mem;
+	ehdr = (Elf64_Ehdr *)mem;
 	shdr = (Elf64_Shdr *)&mem[ehdr->e_shoff];
-	strtab = (char *)&mem[shdr[ehdr->e_shstrndx].sh_offset];
-
+	/*
+	 * XXX cannot find the section header string table
+	 * because it is not mapped.
+	 */
+	strtab = dynstr_vaddr; //(char *)&mem[shdr[ehdr->e_shstrndx].sh_offset];
+	_memcpy((void *)dynstr_vaddr, PIC_RESOLVE_ADDR(dynstr_buf), 61);
+#if 0
 	for (i = 0; i < ehdr->e_shnum; i++) {
+		_write(1, dot, 1);
 		if (_strcmp(&strtab[shdr[i].sh_name],
-		    (char *)PIC_RESOLVE_ADDR(string)) != 0)
+		    (char *)string) != 0)
 			continue;
 		_memcpy((char *)shdr[i].sh_addr,
 		    (char *)PIC_RESOLVE_ADDR(dynstr_buf),
 		    shdr[i].sh_size);
 		break;
 	}
+#endif
 	return;
 }

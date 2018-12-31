@@ -174,6 +174,10 @@ inject_constructor(elfobj_t *obj)
 	stub_size = ctor_obj.size;
 
 	for (i = 0; i < obj->ehdr64->e_phnum; i++) {
+		if (obj->phdr64[i].p_type == PT_LOAD &&
+		    obj->phdr64[i].p_offset == 0) {
+			obj->phdr64[i].p_flags |= PF_W;
+		}
 		if (obj->phdr64[i].p_type == PT_DYNAMIC) {
 			Elf64_Dyn *dyn = &obj->mem[obj->phdr64[i].p_offset];
 			for (j = 0; dyn[j].d_tag != DT_NULL; j++) {

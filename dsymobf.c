@@ -119,7 +119,6 @@ backup_dynstr_and_zero(elfobj_t *obj)
 	printf("After memset\n");
 
 	printit(dynstr.size + 32, ptr);
-
 	for (i = 0; i < dynstr.size; i++) {
 		if (i == libc_index) {
 			strcat(&ptr[i], "libc.so.6");
@@ -156,7 +155,7 @@ done:
 bool
 inject_constructor(elfobj_t *obj)
 {
-	int i, fd;
+	int i, j, fd;
 	size_t old_size = obj->size;
 	size_t stub_size;
 	elfobj_t ctor_obj;
@@ -174,25 +173,34 @@ inject_constructor(elfobj_t *obj)
 	stub_size = ctor_obj.size;
 
 	for (i = 0; i < obj->ehdr64->e_phnum; i++) {
-		if (obj->phdr64[i].p_type != PT_NOTE)
-			continue;
-		printf("Changing load segments\n");
-		obj->phdr64[i].p_type = PT_LOAD;
-		obj->phdr64[i].p_vaddr = 0xc000000 + old_size;
-		printf("Setting filesz for new PT_LOAD to %d\n",
-		    stub_size + PADDING_SIZE);
-		obj->phdr64[i].p_filesz = stub_size + PADDING_SIZE;
-		obj->phdr64[i].p_memsz = obj->phdr64[i].p_filesz;
-		obj->phdr64[i].p_flags = PF_R | PF_X;
-		obj->phdr64[i].p_paddr = obj->phdr64[i].p_vaddr;
-		obj->phdr64[i].p_offset = old_size;
+		if (obj->phdr64[i].p_type == PT_DYNAMIC) {
+			Elf64_Dyn *dyn = &obj->mem[obj->phdr64[i].p_offset];
+			for (j = 0; dyn[j].d_tag != DT_NULL; j++) {
+				if (dyn[j].d_tag == DT_VERNEEDNUM) {
+					dyn[j].d_tag = 0;
+				} else if (dyn[j].d_tag == DT_VERNEED) {
+					dyn[j].d_tag = DT_DEBUG;
+				}
+			}
+		}
+		if (obj->phdr64[i].p_type == PT_NOTE) {
+			printf("Changing load segments\n");
+			obj->phdr64[i].p_type = PT_LOAD;
+			obj->phdr64[i].p_vaddr = 0xc000000 + old_size;
+			printf("Setting filesz for new PT_LOAD to %d\n",
+		    	    stub_size + PADDING_SIZE);
+			obj->phdr64[i].p_filesz = stub_size + PADDING_SIZE;
+			obj->phdr64[i].p_memsz = obj->phdr64[i].p_filesz;
+			obj->phdr64[i].p_flags = PF_R | PF_X;
+			obj->phdr64[i].p_paddr = obj->phdr64[i].p_vaddr;
+			obj->phdr64[i].p_offset = old_size;
+		}
 	}
 #if 0
-	obj->shdr64[3].sh_size = stub_size;
-	obj->shdr64[3].sh_addr = 0xc000000 + old_size;
-	obj->shdr64[3].sh_offset = old_size;
+	obj->shdr64[6].sh_size = stub_size;
+	obj->shdr64[6].sh_addr = 0xc000000 + old_size;
+	obj->shdr64[6].sh_offset = old_size;
 #endif
-
 	if (elf_section_by_name(obj, ".init_array", &ctors) == false) {
 		printf("Cannot find .init_array\n");
 		return false;
@@ -203,11 +211,12 @@ inject_constructor(elfobj_t *obj)
 		printf("cannot find symbol \"restore_dynstr\"\n");
 		return false;
 	}
-	printf("symbol value: %lx\n", symbol.value);
+	printf("restore_dynstr symbol value: %lx\n", symbol.value);
 	ptr = elf_offset_pointer(obj, ctors.offset);
-	uint64_t entry_point = 0xc000000 + old_size + symbol.value; // + sizeof(Elf64_Ehdr);
+	uint64_t symbol_offset = symbol.value - elf_text_base(&ctor_obj);
+	uint64_t entry_point = 0xc000000 + old_size + symbol_offset; // + sizeof(Elf64_Ehdr);
 	memcpy(ptr, &entry_point, sizeof(uint64_t));
-	printf("Set .init_array to %#lx\n", 0xc000000 + old_size + symbol.value);
+	printf("Set .init_array to %#lx\n", 0xc000000 + old_size + symbol_offset);
 	printf("ptr value: %lx\n", *(uint64_t *)ptr);
 	fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU);
 	if (fd < 0) {
@@ -234,11 +243,8 @@ inject_constructor(elfobj_t *obj)
 	/*
 	 * Patch egg so it has the dynstr data
 	 */
-	printf("Symbol location: %lx\n", symbol.value);
-	ptr = elf_offset_pointer(&ctor_obj, symbol.value);
-	ptr += sizeof(Elf64_Ehdr);
-	printf("symbol.value: %lx\n", symbol.value);
-	printf("Copying %d bytes\n", dynstr_len);
+	printf("Looking up symbol value: %lx\n", symbol.value);
+	ptr = elf_address_pointer(&ctor_obj, symbol.value);
 	_memcpy(ptr, dynstr_backup, dynstr_len);
 
 	/*

@@ -1,5 +1,5 @@
 all:
-	gcc -N -fpic -nostdlib constructor.c -o egg
+	gcc -N -fPIC -pie -nostdlib constructor.c -o egg
 	gcc -g dsymobf.c libelfmaster.a -o dsymobf
 	gcc -no-pie test.c -o test
 clean:

@@ -189,18 +189,17 @@ inject_constructor(elfobj_t *obj)
 			obj->phdr64[i].p_vaddr = 0xc000000 + old_size;
 			printf("Setting filesz for new PT_LOAD to %d\n",
 		    	    stub_size + PADDING_SIZE);
-			obj->phdr64[i].p_filesz = stub_size + PADDING_SIZE;
+			obj->phdr64[i].p_filesz = stub_size; // + PADDING_SIZE;
 			obj->phdr64[i].p_memsz = obj->phdr64[i].p_filesz;
 			obj->phdr64[i].p_flags = PF_R | PF_X;
 			obj->phdr64[i].p_paddr = obj->phdr64[i].p_vaddr;
 			obj->phdr64[i].p_offset = old_size;
 		}
 	}
-#if 0
-	obj->shdr64[6].sh_size = stub_size;
-	obj->shdr64[6].sh_addr = 0xc000000 + old_size;
-	obj->shdr64[6].sh_offset = old_size;
-#endif
+	obj->shdr64[17].sh_size = stub_size;
+	obj->shdr64[17].sh_addr = 0xc000000 + old_size;
+	obj->shdr64[17].sh_offset = old_size;
+
 	if (elf_section_by_name(obj, ".init_array", &ctors) == false) {
 		printf("Cannot find .init_array\n");
 		return false;
@@ -213,7 +212,7 @@ inject_constructor(elfobj_t *obj)
 	}
 	printf("restore_dynstr symbol value: %lx\n", symbol.value);
 	ptr = elf_offset_pointer(obj, ctors.offset);
-	uint64_t symbol_offset = symbol.value - elf_text_base(&ctor_obj);
+	uint64_t symbol_offset = symbol.value - (elf_text_base(&ctor_obj) & ~4095);
 	uint64_t entry_point = 0xc000000 + old_size + symbol_offset; // + sizeof(Elf64_Ehdr);
 	memcpy(ptr, &entry_point, sizeof(uint64_t));
 	printf("Set .init_array to %#lx\n", 0xc000000 + old_size + symbol_offset);
@@ -248,11 +247,11 @@ inject_constructor(elfobj_t *obj)
 	_memcpy(ptr, dynstr_backup, dynstr_len);
 
 	/*
-	 * Append constructor.o to the end of the target binary
+	 * Append 'egg' constructor code to the end of the target binary
 	 * the target binary has a PT_LOAD segment with corresponding offset
 	 * and other values pointing to this injected code.
 	 */
-	printf("Writing out constructor.o into final object. %d bytes written\n",
+	printf("Writing out egg into final object. %d bytes written\n",
 	    ctor_obj.size);
 
 	if (write(fd, (char *)ctor_obj.mem, ctor_obj.size) != ctor_obj.size) {

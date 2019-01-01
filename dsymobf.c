@@ -31,38 +31,15 @@
 unsigned char dynstr_backup[DYNSTR_MAX_LEN];
 unsigned long int dynstr_len;
 
-void
-_memcpy(void *dst, void *src, unsigned int len)
-{
-	int i;
-	unsigned char *s = (unsigned char *)src;
-	unsigned char *d = (unsigned char *)dst;
-
-	for (i = 0; i < len; i++) {
-		*d = *s;
-		s++, d++;
-	}
-	return;
-}
-
-void printit(size_t len, uint8_t *ptr)
-{
-	int i;
-	static int count = 0;
-
-	printf("Printing %d item\n", count++);
-	for (i = 0; i < len; i++)
-		printf("%c", ptr[i]);
-	printf("\n");
-}
-
 bool
 backup_dynstr_and_zero(elfobj_t *obj)
 {
 	struct elf_section dynstr, symtab;
 	unsigned char *ptr;
 	int i, len;
-
+	int libc_index = 0, start_main_index = 0, glibc_version_index = 0,
+	    gmon_start_index = 0;
+ 
 	if (elf_section_by_name(obj, ".dynstr", &dynstr) == false) {
 		fprintf(stderr, "couldn't find .dynstr section\n");
 		return false;
@@ -73,76 +50,45 @@ backup_dynstr_and_zero(elfobj_t *obj)
 		fprintf(stderr, "Unable to locate offset: %#lx\n", dynstr.offset);
 		return false;
 	}
-	printf("dynstr offset: %lx, zeroing bytes at %p\n", dynstr.offset, ptr);
 	if (dynstr.size >= DYNSTR_MAX_LEN) {
 		fprintf(stderr, ".dynstr too large\n");
 		return false;
 	}
-	printf("Before backing up\n");
-	printit(dynstr.size + 32, ptr);
-	printf("Backing up dynamic string table from ptr: %p, %lu bytes\n", ptr, dynstr.size);
-
 	memcpy(dynstr_backup, ptr, dynstr.size);
 	dynstr_len = dynstr.size;
-	printf("After we do backup\n");
-	printit(dynstr.size + 32, ptr);
-
-	int libc_index, start_main_index, glibc_version_index, gmon_start_index;
-	size_t libc_len, start_main_len, glibc_version_len, gmon_start_len;
-
-	printf("Before loop\n");
-	printit(dynstr.size + 32, ptr);
 
 	for (i = 0; i < dynstr.size; i++) {
 		if (strcmp(&ptr[i], "libc.so.6") == 0) {
 			libc_index = i;
-			libc_len = strlen("libc.so.6");
 		}
 		else if (strcmp(&ptr[i], "__libc_start_main") == 0) {
 			start_main_index = i;
-			start_main_len = strlen("__libc_start_main");
 		}
 		else if (strcmp(&ptr[i], "GLIBC_2.2.5") == 0) {
 			glibc_version_index = i;
-			glibc_version_len = strlen("GLIBC_2.2.5");
 		}
 		else if (strcmp(&ptr[i], "__gmon_start__") == 0) {
 			gmon_start_index = i;
-			gmon_start_len = strlen("__gmon_start__");
 		}
 	}
-	printit(dynstr.size + 32, ptr);
-	for (i = 0; i < dynstr.size + 32; i++)
-		printf("%c", ptr[i]);
-	printf("\n");
 	memset(ptr, 0, dynstr.size);
-	printf("After memset\n");
 
-	printit(dynstr.size + 32, ptr);
 	for (i = 0; i < dynstr.size; i++) {
 		if (i == libc_index) {
 			strcat(&ptr[i], "libc.so.6");
-			printit(libc_len, &ptr[i]);
 		}
 		else if (i == start_main_index) {
 			strcat(&ptr[i], "__libc_start_main");
-			printit(start_main_len, &ptr[i]);
 		}
 		else if (i == glibc_version_index) {
 			strcat(&ptr[i], "GLIBC_2.2.5");
-			printit(glibc_version_len, &ptr[i]);
 		}
 		else if (i == gmon_start_index) {
 			strcat(&ptr[i], "__gmon_start__\0");
-			printit(gmon_start_len, &ptr[i]);
 		}
 	}
-	for (i = 0; i < dynstr.size + 32; i++) {
-		printf("%c", ptr[i]);
-	}
-	printf("\n");
 	if (elf_section_by_name(obj, ".symtab", &symtab) == false) {
-		fprintf(stderr, "couldn't find .symtab section\n");
+		fprintf(stderr, "couldn't find .symtab section (already stripped)\n");
 		goto done;
 	}
 	ptr = elf_offset_pointer(obj, symtab.offset);
@@ -172,14 +118,22 @@ inject_constructor(elfobj_t *obj)
 		exit(EXIT_FAILURE);
 	}
 	stub_size = ctor_obj.size;
-
+	/*
+	 * NOTE: We are directly modifying libelfmaster object's to update
+	 * the program header table. This is not technically correct since
+	 * its not using the libelfmaster API. Eventually libelfmaster will
+	 * support this through accessor functions that are intended to modify
+	 * meanwhile we are still using libelfmaster to speed up the process
+	 * of creating this PoC for symbol and section lookups.
+	 */
 	for (i = 0; i < obj->ehdr64->e_phnum; i++) {
 		if (obj->phdr64[i].p_type == PT_LOAD &&
 		    obj->phdr64[i].p_offset == 0) {
 			obj->phdr64[i].p_flags |= PF_W;
 		}
 		if (obj->phdr64[i].p_type == PT_DYNAMIC) {
-			Elf64_Dyn *dyn = &obj->mem[obj->phdr64[i].p_offset];
+			Elf64_Dyn *dyn = (Elf64_Dyn *)&obj->mem[obj->phdr64[i].p_offset];
+
 			for (j = 0; dyn[j].d_tag != DT_NULL; j++) {
 				if (dyn[j].d_tag == DT_VERNEEDNUM) {
 					dyn[j].d_tag = 0;
@@ -189,73 +143,113 @@ inject_constructor(elfobj_t *obj)
 			}
 		}
 		if (obj->phdr64[i].p_type == PT_NOTE) {
-			printf("Changing load segments\n");
 			obj->phdr64[i].p_type = PT_LOAD;
 			obj->phdr64[i].p_vaddr = 0xc000000 + old_size;
-			printf("Setting filesz for new PT_LOAD to %d\n",
-		    	    stub_size + PADDING_SIZE);
-			obj->phdr64[i].p_filesz = stub_size; // + PADDING_SIZE;
+			obj->phdr64[i].p_filesz = stub_size;
 			obj->phdr64[i].p_memsz = obj->phdr64[i].p_filesz;
 			obj->phdr64[i].p_flags = PF_R | PF_X;
 			obj->phdr64[i].p_paddr = obj->phdr64[i].p_vaddr;
 			obj->phdr64[i].p_offset = old_size;
 		}
 	}
+	/*
+	 * For debugging purposes we can view our injected code
+	 * with objdump by modifying an existing section header
+	 * such as .eh_frame.
+	 */
+#if 0
 	obj->shdr64[17].sh_size = stub_size;
 	obj->shdr64[17].sh_addr = 0xc000000 + old_size;
 	obj->shdr64[17].sh_offset = old_size;
-
+#endif
+	/*
+	 * Locate .init_array so that we can modify the pointer to
+	 * our injected constructor code 'egg (built from constructor.c)'
+	 */
 	if (elf_section_by_name(obj, ".init_array", &ctors) == false) {
 		printf("Cannot find .init_array\n");
 		return false;
 	}
 
+	/*
+	 * Locate the symbol for the function restore_dynstr in our
+	 * constructor so that we can find out where to hook the .init_array
+	 * function pointer to.
+	 */
 	if (elf_symbol_by_name(&ctor_obj, "restore_dynstr",
 	    &symbol) == false) {
 		printf("cannot find symbol \"restore_dynstr\"\n");
 		return false;
 	}
-	printf("restore_dynstr symbol value: %lx\n", symbol.value);
+
+	/*
+	 * Get a pointer to .init_array function pointer
+	 * so that we can hook it with our constructor
+	 * entry point 'restore_dynstr'
+	 */
 	ptr = elf_offset_pointer(obj, ctors.offset);
 
+	/*
+	 * Because of the way that we build the constructor using 'gcc -N'
+	 * it creates a single load segment that is not PAGE aligned, we must
+	 * therefore PAGE align it to get the correct symbol_offset from the beginning
+	 * of the ELF file.
+	 */
 	uint64_t symbol_offset = symbol.value - (elf_text_base(&ctor_obj) & ~4095);
-	uint64_t entry_point = 0xc000000 + old_size + symbol_offset; // + sizeof(Elf64_Ehdr);
+	uint64_t entry_point = 0xc000000 + old_size + symbol_offset;
 
+	/*
+	 * Set the actual constructor hook with this memcpy.
+	 * i.e. *(uint64_t *)&ptr[0] = entry_point;
+	 */
 	memcpy(ptr, &entry_point, sizeof(uint64_t));
 
-	printf("Set .init_array to %#lx\n", 0xc000000 + old_size + symbol_offset);
-	printf("ptr value: %lx\n", *(uint64_t *)ptr);
-
+	/*
+	 * Now lets get the address of the dynstr_vaddr
+	 * within the constructor object. This will eventually
+	 * hold the address of the target executables .dynstr
+	 * section.
+	 */
 	if (elf_symbol_by_name(&ctor_obj, "dynstr_vaddr",
 	    &symbol) == false) {
 		printf("cannot find symbol \"dynstr_vaddr\"\n");
 		return false;
 	}
 
-	printf("dynstr_vaddr value: %lx\n", symbol.value);
 	symbol_offset = symbol.value - (elf_text_base(&ctor_obj) & ~4095);
 
 	if (elf_section_by_name(obj, ".dynstr", &dynstr) == false) {
 		printf("Cannot find .dynstr\n");
 		return false;
 	}
+
+	/*
+	 * Set dynstr_vaddr to point to .dynstr in the target
+	 * executable.
+	 */
 	ptr = elf_offset_pointer(&ctor_obj, symbol_offset);
 	memcpy(ptr, &dynstr.address, sizeof(uint64_t));
-	printf("Copied address %lx into egg at offset: %lx\n", dynstr.address, symbol_offset);
+
+	/*
+	 * Get ready to write out our new final executable
+	 * which includes the constructor code as a 3rd PT_LOAD
+	 * segment
+	 */
 	fd = open(TMP_FILE, O_RDWR|O_CREAT|O_TRUNC, S_IRWXU);
 	if (fd < 0) {
 		perror("open");
 		return false;
 	}
 
-	printf("obj->shdr64[1].sh_offset = %d same as %d?\n", obj->shdr64[1].sh_offset, old_size);
-	printf("Writing %d bytes of obj->mem\n", old_size);
+	/*
+	 * Write out the original binary
+	 */
 	if (write(fd, obj->mem, old_size) != old_size) {
 		perror("write");
 		return false;
 	}
 	/*
-	 * open constructor.o and find the buffer to store the contents
+	 *  open 'egg' and find the buffer to store the contents
 	 * of dynstr (It is called dynstr_buf)
 	 */
 	if (elf_symbol_by_name(&ctor_obj, "dynstr_buf",
@@ -265,20 +259,19 @@ inject_constructor(elfobj_t *obj)
 	}
 
 	/*
-	 * Patch egg so it has the dynstr data
+	 * Patch egg so it has the .dynstr data in its
+	 * char dynstr_buf[], so that at runtime it can
+	 * restore it into the .dynstr section of the
+	 * target executable that egg is injected into.
 	 */
-	printf("Looking up symbol value: %lx\n", symbol.value);
 	ptr = elf_address_pointer(&ctor_obj, symbol.value);
-	_memcpy(ptr, dynstr_backup, dynstr_len);
+	memcpy(ptr, dynstr_backup, dynstr_len);
 
 	/*
 	 * Append 'egg' constructor code to the end of the target binary
 	 * the target binary has a PT_LOAD segment with corresponding offset
 	 * and other values pointing to this injected code.
 	 */
-	printf("Writing out egg into final object. %d bytes written\n",
-	    ctor_obj.size);
-
 	if (write(fd, (char *)ctor_obj.mem, ctor_obj.size) != ctor_obj.size) {
 		perror("write");
 		return false;
@@ -317,7 +310,7 @@ main(int argc, char **argv)
 	res = inject_constructor(&obj);
 
 	printf("Commiting changes to %s\n", obj.path);
-	elf_close_object(&obj); }
-	
+	elf_close_object(&obj);
+}
 	
 

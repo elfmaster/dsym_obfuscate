@@ -65,6 +65,6 @@ restore_dynstr(void)
 	 * back into place right before the dynamic linker needs them
 	 * for lazy linking.
 	 */
-	_memcpy((char *)dynstr_vaddr, (char *)PIC_RESOLVE_ADDR(dynstr_buf), 61);
+	_memcpy((char *)dynstr_vaddr, (char *)PIC_RESOLVE_ADDR(dynstr_buf), dynstr_size);
 	return;
 }

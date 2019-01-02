@@ -31,15 +31,28 @@
 unsigned char dynstr_backup[DYNSTR_MAX_LEN];
 unsigned long int dynstr_len;
 
+#define MAX_SO_BASENAMES 1024
+
+struct so_basenames {
+	char *basename;
+	uint32_t index;
+} so_basenames[MAX_SO_BASENAMES];
+
+uint32_t basename_count = 0;
+
 bool
 backup_dynstr_and_zero(elfobj_t *obj)
 {
 	struct elf_section dynstr, symtab;
 	unsigned char *ptr;
-	int i, len;
-	int libc_index = 0, start_main_index = 0, glibc_version_index = 0,
-	    gmon_start_index = 0;
- 
+	int i, j, len;
+	int libc_index = ~0, start_main_index = ~0, glibc_version_index = ~0,
+	    gmon_start_index = ~0, ITM_deregisterTMCloneTab_index = ~0,
+	    __cxa_finalize_index = ~0, ITM_registerTMCloneTable_index = ~0;
+	elf_dynamic_iterator_t iter;
+	elf_dynamic_entry_t entry;
+	bool res;
+
 	if (elf_section_by_name(obj, ".dynstr", &dynstr) == false) {
 		fprintf(stderr, "couldn't find .dynstr section\n");
 		return false;
@@ -54,14 +67,39 @@ backup_dynstr_and_zero(elfobj_t *obj)
 		fprintf(stderr, ".dynstr too large\n");
 		return false;
 	}
+
 	memcpy(dynstr_backup, ptr, dynstr.size);
 	dynstr_len = dynstr.size;
 
-	for (i = 0; i < dynstr.size; i++) {
-		if (strcmp(&ptr[i], "libc.so.6") == 0) {
-			libc_index = i;
+	elf_dynamic_iterator_init(obj, &iter);
+	for (;;) {
+		res = elf_dynamic_iterator_next(&iter, &entry);
+		if (res == ELF_ITER_DONE)
+			break;
+		if (res == ELF_ITER_ERROR) {
+			fprintf(stderr, "dynamic segment iterator failure\n");
+			return false;
 		}
-		else if (strcmp(&ptr[i], "__libc_start_main") == 0) {
+		if (entry.tag != DT_NEEDED)
+			continue;
+		so_basenames[basename_count].basename = strdup(elf_dynamic_string(obj, entry.value));
+		if (so_basenames[basename_count].basename == NULL) {
+			fprintf(stderr, "strdup failed\n");
+			return false;
+		}
+		printf("Loaded basename: %s\n", so_basenames[basename_count].basename);
+		basename_count++;
+	}
+	/*
+	 * Get offsets of imperative string table values for ld.so
+	 */
+	for (i = 0; i < dynstr.size; i++) {
+		for (j = 0; j < basename_count; j++) {
+			if (strcmp(&ptr[i], so_basenames[j].basename) == 0) {
+				so_basenames[j].index = i;
+			}
+		}
+		if (strcmp(&ptr[i], "__libc_start_main") == 0) {
 			start_main_index = i;
 		}
 		else if (strcmp(&ptr[i], "GLIBC_2.2.5") == 0) {
@@ -70,14 +108,27 @@ backup_dynstr_and_zero(elfobj_t *obj)
 		else if (strcmp(&ptr[i], "__gmon_start__") == 0) {
 			gmon_start_index = i;
 		}
+		else if (strcmp(&ptr[i], "_ITM_deregisterTMCloneTab") == 0) {
+			ITM_deregisterTMCloneTab_index = i;
+		}
+		else if (strcmp(&ptr[i], "_ITM_registerTMCloneTable") == 0) {
+			ITM_registerTMCloneTable_index = i;
+		}
+		else if (strcmp(&ptr[i], "__cxa_finalize") == 0) {
+			__cxa_finalize_index = i;
+		}
 	}
 	memset(ptr, 0, dynstr.size);
 
 	for (i = 0; i < dynstr.size; i++) {
-		if (i == libc_index) {
-			strcat(&ptr[i], "libc.so.6");
+		for (j = 0; j < basename_count; j++) {
+			if (i == so_basenames[j].index) {
+				printf("Copying over: %s to index %d\n",
+				    so_basenames[j].basename, i);
+				strcat(&ptr[i], so_basenames[j].basename);
+			}
 		}
-		else if (i == start_main_index) {
+		if (i == start_main_index) {
 			strcat(&ptr[i], "__libc_start_main");
 		}
 		else if (i == glibc_version_index) {
@@ -85,6 +136,12 @@ backup_dynstr_and_zero(elfobj_t *obj)
 		}
 		else if (i == gmon_start_index) {
 			strcat(&ptr[i], "__gmon_start__\0");
+		}
+		else if (i == ITM_deregisterTMCloneTab_index) {
+			strcat(&ptr[i], "_ITM_deregisterTMCloneTab");
+		}
+		else if (i == ITM_registerTMCloneTable_index) {
+			strcat(&ptr[i], "_ITM_registerTMCloneTable");
 		}
 	}
 	if (elf_section_by_name(obj, ".symtab", &symtab) == false) {
@@ -254,7 +311,7 @@ inject_constructor(elfobj_t *obj)
 	 */
 	if (elf_symbol_by_name(&ctor_obj, "dynstr_buf",
 	    &symbol) == false) {
-		fprintf(stderr, "Unable to find symbol dynstr_buf in constructor.o\n");
+		fprintf(stderr, "Unable to find symbol dynstr_buf in egg binary\n");
 		return false;
 	}
 
@@ -266,6 +323,18 @@ inject_constructor(elfobj_t *obj)
 	 */
 	ptr = elf_address_pointer(&ctor_obj, symbol.value);
 	memcpy(ptr, dynstr_backup, dynstr_len);
+
+	/*
+	 * Find dynstr_size variable within egg, and update it with the size
+	 * of the .dynstr section.
+	 */
+	if (elf_symbol_by_name(&ctor_obj, "dynstr_size",
+	    &symbol) == false) {
+		fprintf(stderr, "Unable to find symbol dynstr_size in egg binary\n");
+		return false;
+	}
+	ptr = elf_address_pointer(&ctor_obj, symbol.value);
+	memcpy(ptr, &dynstr_len, sizeof(unsigned long int));
 
 	/*
 	 * Append 'egg' constructor code to the end of the target binary

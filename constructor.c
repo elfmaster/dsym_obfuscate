@@ -49,7 +49,7 @@ get_rip(void)
  * actually called. restore_dynstr() is called by the target
  * executables constructor function table that we patch.
  */
-_start()
+int _start()
 {
 	restore_dynstr();
 	        __asm__ volatile("mov $0, %rdi\n"

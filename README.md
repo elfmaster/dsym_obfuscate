@@ -9,6 +9,7 @@ Currently only works on non PIE executable's. This can easily be fixed.
 
 # Build
 
+
 git clone https://github.com/elfmaster/libelfmaster
 cd libelfmaster
 make
@@ -32,15 +33,16 @@ Copying over: libc.so.6 to index 1
 Injecting constructor.o into ./test
 Commiting changes to ./test
 elfmaster@dreamcity:~/git/dsym_obfuscate$ nm -D test
-                 U 
-                 U 
-                 U 
-                 U 
+                 U
+                 U
+                 U
+                 U
                  w __gmon_start__
                  U __libc_start_main
 elfmaster@dreamcity:~/git/dsym_obfuscate$ ./test
 Hi
 ^C
+
 
 # Further work
 

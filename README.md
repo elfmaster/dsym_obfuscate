@@ -42,3 +42,11 @@ elfmaster@dreamcity:~/git/dsym_obfuscate$ ./test
 Hi
 ^C
 
+# Further work
+
+Get this working on PIE binaries, and binaries that are linked to libraries
+other than libc.so.
+
+Currently we just backup the dynamic symbol table, but in practice you would
+want to encrypt it with a stream cypher, back it up, and then decrypt it
+before restoring at runtime.

@@ -9,16 +9,18 @@ Currently only works on non PIE executable's. This can easily be fixed.
 
 # Build
 
-
+```
 git clone https://github.com/elfmaster/libelfmaster
 cd libelfmaster
 make
 sudo make install
 cd ~/dsym_obfuscate
 make
+```
 
 # Test
 
+```
 elfmaster@dreamcity:~/git/dsym_obfuscate$ nm -D test
                  U fopen
                  w __gmon_start__
@@ -42,7 +44,7 @@ elfmaster@dreamcity:~/git/dsym_obfuscate$ nm -D test
 elfmaster@dreamcity:~/git/dsym_obfuscate$ ./test
 Hi
 ^C
-
+```
 
 # Further work
 

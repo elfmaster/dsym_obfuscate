@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include <libelfmaster.h>
+#include "/opt/elfmaster/include/libelfmaster.h"
 
 #include <assert.h>
 #include <elf.h>
